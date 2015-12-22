@@ -1,0 +1,836 @@
+---
+title: "Final Project - Income Inequality Analysis"
+author: "Emilio Esposito"
+date: "October 16, 2015"
+output: html_document
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/', warning=FALSE, message=FALSE)
+```
+
+###Executive Summary
+##### The purpose of this project is to analyze the data set from the National Longitudinal Survey of Youth (1997 cohort) in order to determine if there is a signifcant difference in income between men and women. We will also determine if any discrepancy in income varies based on other factors in the data (e.g., education, profession, criminal history, marriage status, etc.).
+
+###1. Data Summary
+####**(a)**Import Data and Rename Columns
+
+The first step is to import and put our data into a useful format. Below we read in the data and rename the columns with meaningful variable names:
+
+```{r, result='hide', message=FALSE, echo=FALSE}
+# import packages for later
+library(MASS)
+library(plyr) 
+library(ggplot2)
+library(knitr)
+library(PASWR)
+```
+
+```{r, echo=FALSE, result='hide', message=FALSE}
+# useful functions from hw4 that I use later on
+generateNumericSummary <- function(x, groups) {
+  
+  # get missing values in x
+  x.missing <- length(x[is.na(x)])
+  
+  # get mean values of x by group
+  x.means.group <- as.vector(tapply(x, INDEX = groups, FUN = function(x) mean(x, na.rm = TRUE)))
+  
+  # get sd values of x by group
+  x.sds.group <- as.vector(tapply(x, INDEX = groups, FUN = function(x) sd(x, na.rm = TRUE)))
+  
+  # get p-value
+    # for 2 groups using t.test
+  if (length(unique(groups)) == 2) {
+    x.p.value <- t.test(x ~ groups)$p.value
+  }
+    # otherwise use anova
+  else {
+    x.p.value <- summary(aov(x ~ groups))[[1]][["Pr(>F)"]][1]
+  }
+  
+  # create list of output
+  output.list <- list(x.missing, x.means.group, x.sds.group, x.p.value, FALSE)
+  
+  # assign labels to list
+  names(output.list) <- c("missing", "means", "sds", "p.value", "is.binary")
+  
+  # return list
+  output.list
+}
+generateBinarySummary <- function(x, groups) {
+  
+  # get missing values in x
+  x.missing <- length(x[is.na(x)])
+  
+  # get prop values of x by group (the mean of a binary vector is the same as proportion of 1's to all values)
+  x.prop.group <- as.vector(tapply(x, INDEX = groups, FUN = function(x) mean(x, na.rm = TRUE)))
+  
+  # get p-value using fisher test
+  x.p.value <- fisher.test(table(x, groups))$p.value
+  
+  # create list of output
+  output.list <- list(x.missing, x.prop.group, x.p.value, TRUE)
+  
+  # assign labels to list
+  names(output.list) <- c("missing", "prop", "p.value", "is.binary")
+  
+  # return list
+  output.list
+}
+generateVariableSummary <- function(x, groups) {
+  
+  # check if x vector has characters, and return NULL if it does
+  if (typeof(x)=="character")  return(NULL)
+  
+  # check if x vector is factor vector,, and return NULL if it does
+  if (is.factor(x))  return(NULL)
+  
+  # check if x is binary; if it is call generateBinarySummary
+  if (all(x %in% c(0, 1, NA))) {
+    generateBinarySummary(x, groups)
+  }
+  # otherwise call generateNumericSummary
+  else generateNumericSummary(x, groups)
+}
+formatVariableSummary <- function(var.summary) {
+  
+  # handle null return
+  if (is.null(var.summary)) return(NULL) 
+  
+  # format binary
+  if (var.summary$is.binary) {
+    
+    with(var.summary, c(missing, 
+                        paste(round(prop*100,1), "%", sep=""), 
+                        round(p.value,4)))
+    
+  }
+  # format numeric
+  else {
+    with(var.summary, c(missing, 
+                        paste(round(means,2), " (", round(sds,2), ") ", sep=""), 
+                        round(p.value,4)))
+  }
+}
+generateDataSummary <- function(dataset, varnames, group.name) {
+  # initialize null table to combine summary tables
+  combine.table <- NULL
+  
+  for (i in 1:length(varnames)) {
+    # get the variable summary for each variable in varnames
+    var.summary <- generateVariableSummary(dataset[[varnames[i]]], dataset[[group.name]])
+    
+    # format the summary
+    format.var.summary <- formatVariableSummary(var.summary)
+    
+    # if summary is NOT NULL, then combine the formatted summaries, and add the variable name to beginning of each row
+    if (!is.null(format.var.summary)) {
+      combine.table <- rbind(combine.table,c(varnames[i], format.var.summary))
+    }
+  }
+  # convert to data frame
+  df.output <- as.data.frame(combine.table)
+  # set column names
+  colnames(df.output) <- c("Variable", "Missing", levels(dataset[[group.name]]), "P-Value")
+  # return data frame
+  df.output
+}
+```
+
+```{r}
+# import raw csv data from working directory
+
+nlsy <- read.csv(paste(getwd(),"nlsy97_income.csv", sep = "/"), header=TRUE, )
+
+
+# Change column names more descriptive names
+colnames(nlsy) <- c("incar.num","incar.age.first","incar.months.longest","pubid","agree.teacher.good","agree.feel.safe","days.religious","perc.chance.flu","perc.chance.hs.diploma.by.20","perc.chance.jail.by.20","perc.chance.parent.by.20","perc.chance.college.by.30","gender","birth.month","birth.year","limitations.school.work","depressed.female","depressed.male","enrollment.status","net.worth.from.parent.1997","sample","race","grades.8th","grades.hs","drug.use.1998","days.marijuana.used.last.30.2000","disorganized","trustful","net.worth.from.r.2003","weight.2004","weight.description.2004","resp.help.less.fortunate","resp.take.care.self","helping.people.important","resp.look.after.self","college.public.private","income.family","household.size","household.mem.under.18","household.mem.under.6","highest.degree.asof.2011","marital.status","highest.grade.asof.2011","income.yes.no","income","income.spouse.yes.no","income.spouse","income.spouse.est","height.ft","height.inch","weight.2011","smoked.since.last.interview","alcohol.since.last.interview","days.marijuana.used.last.30.2011","drug.use.since.last.interview","weight.description.2011","weight.goal.2011","energy.past.4.wk","work.industry","score.sat.math","score.sat.verbal","score.act","debt.age.20","num.employee.jobs.14.to.20","num.employee.jobs.since.20","num.jobs.since.20","debt.age.30")
+```
+
+Initial Observation Count is: `r nrow(nlsy)`
+
+####**(b)** Handle Negative Values
+
+The data has 5 negative integer values (-5 to -1) that are reserved for survey questions without answers. We want to remove these values and replace them with `NA` so that they do not interfere with regression. However, we don't want to replace all negative values with `NA` since there are some fields with legitimate negative values (e.g. net worth can be negative).
+
+Therefore, we will map -1 through -5 to `NA` for numeric columns and "?" for categorical columns:
+```{r, echo=FALSE}
+# first categorize vectors in factor vs numeric
+# assign numeric variable names to a vector 
+var.numeric <- c("incar.num", "incar.age.first", "incar.months.longest", "days.religious", "perc.chance.flu", "perc.chance.hs.diploma.by.20", "perc.chance.jail.by.20", "perc.chance.parent.by.20", "perc.chance.college.by.30", "birth.month", "birth.year", "net.worth.from.parent.1997", "days.marijuana.used.last.30.2000", "net.worth.from.r.2003", "weight.2004", "income.family", "household.size", "household.mem.under.18", "household.mem.under.6", "highest.grade.asof.2011", "income", "income.spouse", "height.ft", "height.inch", "weight.2011", "days.marijuana.used.last.30.2011", "debt.age.20", "num.employee.jobs.14.to.20", "num.employee.jobs.since.20", "num.jobs.since.20", "debt.age.30")
+
+# assign factor variable names to a vector
+var.factor <-c("agree.teacher.good", "agree.feel.safe", "gender", "limitations.school.work", "depressed.female", "depressed.male", "enrollment.status", "sample", "race", "grades.8th", "grades.hs", "drug.use.1998", "disorganized", "trustful", "weight.description.2004", "resp.help.less.fortunate", "resp.take.care.self", "helping.people.important", "resp.look.after.self", "college.public.private", "highest.degree.asof.2011", "marital.status", "income.yes.no", "income.spouse.yes.no", "income.spouse.est", "smoked.since.last.interview", "alcohol.since.last.interview", "drug.use.since.last.interview", "weight.description.2011", "weight.goal.2011", "energy.past.4.wk", "work.industry", "score.sat.math", "score.sat.verbal", "score.act")
+```
+```{r}
+# Map special values to NA in every NUMERIC column: Refusal(-1), Don't Know(-2), Invalid Skip (-3),VALID SKIP(-4), NON-INTERVIEW(-5)
+nlsy[var.numeric] <- lapply(nlsy[var.numeric], FUN= function(x) replace(x, x %in% c(-1,-2,-3,-4,-5), NA))
+
+# Map special values to "?"" in every FACTOR column: Refusal(-1), Don't Know(-2), Invalid Skip (-3),VALID SKIP(-4), NON-INTERVIEW(-5)
+nlsy[var.factor] <- lapply(nlsy[var.factor], FUN= function(x) replace(x, x %in% c(-1,-2,-3,-4,-5), "?"))
+```
+
+####**(c)** Fix factor level names for categorical variables
+
+Map all categorical variables to factors with meaningful level names. Below I show code for only 2 variables (gender and race) as an example, but in the RMD you will see I suppressed code that maps over 30 factor variables, all with custom level names.
+
+```{r}
+# assign meaningful factor names
+nlsy <- transform(nlsy, 
+                  gender = factor(mapvalues(gender,
+                                            c(1, 2), 
+                                            c("Male", "Female")), 
+                                  levels= c("Male", "Female") 
+                                  ),
+                  race = factor(mapvalues(race,
+                                            c(1, 2, 3, 4),
+                                            c("Black", "Hispanic", "Mixed", "Non-Black/NonHispanic")), 
+                                  levels= c("Non-Black/NonHispanic", "Black", "Hispanic", "Mixed", "?")
+                                  )
+                  )
+```
+
+```{r, echo=FALSE, result='hide', message=FALSE}
+# perform mapping on remaining factors (formulas were prepped in Excel spreadsheet)
+nlsy["agree.teacher.good"] <- factor(mapvalues(nlsy[["agree.teacher.good"]],c(1, 2, 3, 4), 
+		c("Strongly Agree", "Agree", "Disagree", "Strongly Disagree")), 
+		levels= c("Strongly Agree", "Agree", "Disagree", "Strongly Disagree","?"))
+nlsy["agree.feel.safe"] <- factor(mapvalues(nlsy[["agree.feel.safe"]],c(1, 2, 3, 4), 
+		c("Strongly Agree", "Agree", "Disagree", "Strongly Disagree")), 
+		levels= c("Strongly Agree", "Agree", "Disagree", "Strongly Disagree","?"))
+nlsy["limitations.school.work"] <- factor(mapvalues(nlsy[["limitations.school.work"]],c(1, 0), 
+		c("Yes", "No")), 
+		levels= c("Yes", "No","?"))
+nlsy["depressed.female"] <- factor(mapvalues(nlsy[["depressed.female"]],c(0, 1, 2), 
+		c("Not True", "Sometime True", "Often True")), 
+		levels= c("Not True", "Sometime True", "Often True","?"))
+nlsy["depressed.male"] <- factor(mapvalues(nlsy[["depressed.male"]],c(0, 1, 2), 
+		c("Not True", "Sometime True", "Often True")), 
+		levels= c("Not True", "Sometime True", "Often True","?"))
+nlsy["enrollment.status"] <- factor(mapvalues(nlsy[["enrollment.status"]],c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11), 
+		c("Not enrolled, no high school degree, no GED", "Not enrolled, GED", "Not enrolled, high school degree", "Not enrolled, some college", "Not enrolled, 2-year college graduate", "Not enrolled, 4-year college graduate", "Not enrolled, graduate degree", "Enrolled in grades 1-12, not a high school graduate", "Enrolled in a 2-year college", "Enrolled in a 4-year college", "Enrolled in a graduate program")), 
+		levels= c("Not enrolled, no high school degree, no GED", "Not enrolled, GED", "Not enrolled, high school degree", "Not enrolled, some college", "Not enrolled, 2-year college graduate", "Not enrolled, 4-year college graduate", "Not enrolled, graduate degree", "Enrolled in grades 1-12, not a high school graduate", "Enrolled in a 2-year college", "Enrolled in a 4-year college", "Enrolled in a graduate program","?"))
+nlsy["sample"] <- factor(mapvalues(nlsy[["sample"]],c(1, 0), 
+		c("Cross-sectional", "Oversample")), 
+		levels= c("Cross-sectional", "Oversample","?"))
+nlsy["grades.8th"] <- factor(mapvalues(nlsy[["grades.8th"]],c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13), 
+		c("Mostly below Ds", "Mostly Ds", "About half Cs and half Ds", "Mostly Cs", "About half Bs and half Cs", "Mostly Bs", "About half As and Bs", "Mostly As", "Other (SPECIFY)", "A's to C's", "Mixed", "Ungraded", "Skipped 8th grade")), 
+		levels= c("Mostly below Ds", "Mostly Ds", "About half Cs and half Ds", "Mostly Cs", "About half Bs and half Cs", "Mostly Bs", "About half As and Bs", "Mostly As", "Other (SPECIFY)", "A's to C's", "Mixed", "Ungraded", "Skipped 8th grade","?"))
+nlsy["grades.hs"] <- factor(mapvalues(nlsy[["grades.hs"]],c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13), 
+		c("Mostly below Ds", "Mostly Ds", "About half Cs and half Ds", "Mostly Cs", "About half Bs and half Cs", "Mostly Bs", "About half As and Bs", "Mostly As", "Other (SPECIFY)", "A's to C's", "Mixed", "Ungraded", "Skipped 8th grade")), 
+		levels= c("Mostly below Ds", "Mostly Ds", "About half Cs and half Ds", "Mostly Cs", "About half Bs and half Cs", "Mostly Bs", "About half As and Bs", "Mostly As", "Other (SPECIFY)", "A's to C's", "Mixed", "Ungraded", "Skipped 8th grade","?"))
+nlsy["drug.use.1998"] <- factor(mapvalues(nlsy[["drug.use.1998"]],c(1, 0), 
+		c("Yes", "No")), 
+		levels= c("Yes", "No","?"))
+nlsy["disorganized"] <- factor(mapvalues(nlsy[["disorganized"]],c(1, 2, 3, 4, 5), 
+		c("Very Organized", "Somewhat Orgnanized", "Neither", "Somewhat Disorganized", "Very Disorganized")), 
+		levels= c("Very Organized", "Somewhat Orgnanized", "Neither", "Somewhat Disorganized", "Very Disorganized","?"))
+nlsy["trustful"] <- factor(mapvalues(nlsy[["trustful"]],c(1, 2, 3, 4, 5), 
+		c("Very Distrustful", "Somewhat Dsitrustful", "Neither", "Somewhat Trustful", "Very Trustful")), 
+		levels= c("Very Distrustful", "Somewhat Dsitrustful", "Neither", "Somewhat Trustful", "Very Trustful","?"))
+nlsy["weight.description.2004"] <- factor(mapvalues(nlsy[["weight.description.2004"]],c(1, 2, 3, 4, 5), 
+		c("Very UnderWeight", "SLIGHTLY UnderWeight", "ABOUT THE RIGHT WEIGHT", "SLIGHTLY OverWeight", "Very OverWeight")), 
+		levels= c("Very UnderWeight", "SLIGHTLY UnderWeight", "ABOUT THE RIGHT WEIGHT", "SLIGHTLY OverWeight", "Very OverWeight","?"))
+nlsy["resp.help.less.fortunate"] <- factor(mapvalues(nlsy[["resp.help.less.fortunate"]],c(4, 3, 2, 1, 0), 
+		c("Strongly Agree", "Agree", "Neither", "Disagree", "Strongly Disagree")), 
+		levels= c("Strongly Agree", "Agree", "Neither", "Disagree", "Strongly Disagree","?"))
+nlsy["resp.take.care.self"] <- factor(mapvalues(nlsy[["resp.take.care.self"]],c(4, 3, 2, 1, 0), 
+		c("Strongly Agree", "Agree", "Neither", "Disagree", "Strongly Disagree")), 
+		levels= c("Strongly Agree", "Agree", "Neither", "Disagree", "Strongly Disagree","?"))
+nlsy["helping.people.important"] <- factor(mapvalues(nlsy[["helping.people.important"]],c(4, 3, 2, 1, 0), 
+		c("Strongly Agree", "Agree", "Neither", "Disagree", "Strongly Disagree")), 
+		levels= c("Strongly Agree", "Agree", "Neither", "Disagree", "Strongly Disagree","?"))
+nlsy["resp.look.after.self"] <- factor(mapvalues(nlsy[["resp.look.after.self"]],c(4, 3, 2, 1, 0), 
+		c("Strongly Agree", "Agree", "Neither", "Disagree", "Strongly Disagree")), 
+		levels= c("Strongly Agree", "Agree", "Neither", "Disagree", "Strongly Disagree","?"))
+nlsy["college.public.private"] <- factor(mapvalues(nlsy[["college.public.private"]],c(1, 2, 3), 
+		c("Public", "Private not-for-profit", "Private for-profit")), 
+		levels= c("Public", "Private not-for-profit", "Private for-profit","?"))
+nlsy["highest.degree.asof.2011"] <- factor(mapvalues(nlsy[["highest.degree.asof.2011"]],c(0, 1, 2, 3, 4, 5, 6, 7), 
+		c("None", "GED", "High School", "Associate", "Bachelor", "Master", "PhD", "Professional")), 
+		levels= c("None", "GED", "High School", "Associate", "Bachelor", "Master", "PhD", "Professional","?"))
+nlsy["marital.status"] <- factor(mapvalues(nlsy[["marital.status"]],c(0, 1, 2, 3, 4), 
+		c("Never-married", "Married", "Separated", "Divorced", "Widowed")), 
+		levels= c("Never-married", "Married", "Separated", "Divorced", "Widowed","?"))
+nlsy["income.yes.no"] <- factor(mapvalues(nlsy[["income.yes.no"]],c(1, 0), 
+		c("Yes", "No")), 
+		levels= c("Yes", "No","?"))
+nlsy["income.spouse.yes.no"] <- factor(mapvalues(nlsy[["income.spouse.yes.no"]],c(1, 0), 
+		c("Yes", "No")), 
+		levels= c("Yes", "No","?"))
+nlsy["income.spouse.est"] <- factor(mapvalues(nlsy[["income.spouse.est"]],c(1, 2, 3, 4, 5, 6, 7), 
+		c(" $1 - $5,000", " $5,001 - $10,000", " $10,001 - $25,000", " $25,001 - $50,000", " $50,001 - $100,000", " $100,001 - $250,000", " More than $250,000")), 
+		levels= c(" $1 - $5,000", " $5,001 - $10,000", " $10,001 - $25,000", " $25,001 - $50,000", " $50,001 - $100,000", " $100,001 - $250,000", " More than $250,000","?"))
+nlsy["smoked.since.last.interview"] <- factor(mapvalues(nlsy[["smoked.since.last.interview"]],c(1, 0), 
+		c("Yes", "No")), 
+		levels= c("Yes", "No","?"))
+nlsy["alcohol.since.last.interview"] <- factor(mapvalues(nlsy[["alcohol.since.last.interview"]],c(1, 0), 
+		c("Yes", "No")), 
+		levels= c("Yes", "No","?"))
+nlsy["drug.use.since.last.interview"] <- factor(mapvalues(nlsy[["drug.use.since.last.interview"]],c(1, 0), 
+		c("Yes", "No")), 
+		levels= c("Yes", "No","?"))
+nlsy["weight.description.2011"] <- factor(mapvalues(nlsy[["weight.description.2011"]],c(1, 2, 3, 4, 5), 
+		c("Very UnderWeight", "SLIGHTLY UnderWeight", "ABOUT THE RIGHT WEIGHT", "SLIGHTLY OverWeight", "Very OverWeight")), 
+		levels= c("Very UnderWeight", "SLIGHTLY UnderWeight", "ABOUT THE RIGHT WEIGHT", "SLIGHTLY OverWeight", "Very OverWeight","?"))
+nlsy["weight.goal.2011"] <- factor(mapvalues(nlsy[["weight.goal.2011"]],c(1, 2, 3, 4), 
+		c("Lose", "Gain", "Stay Same", "Nothing")), 
+		levels= c("Lose", "Gain", "Stay Same", "Nothing","?"))
+nlsy["energy.past.4.wk"] <- factor(mapvalues(nlsy[["energy.past.4.wk"]],c(1, 2, 3, 4, 5, 6), 
+		c("ALL OF THE TIME", "MOST OF THE TIME", "A GOOD BIT OF THE TIME", "SOME OF THE TIME", "A LITTLE OF THE TIME", "NONE OF THE TIME")), 
+		levels= c("ALL OF THE TIME", "MOST OF THE TIME", "A GOOD BIT OF THE TIME", "SOME OF THE TIME", "A LITTLE OF THE TIME", "NONE OF THE TIME","?"))
+nlsy["work.industry"] <- factor(mapvalues(nlsy[["work.industry"]],
+    c(170:290, 370:490, 570:690, 770, 1070:3990, 4070:4590, 4670:5790, 5890, 6070:6390, 6470:6780, 6870:7190, 7270:7790, 7860:8470, 8560:8690, 8770:9290, 9370:9590, 9670:9890, 9950:9990), 
+    c(rep("Agriculture", 121), rep("Mining", 121), rep("Utilities", 121), rep("Construction", ), rep("Manufacturing", 2921), rep("Whlsle Trade", 521), rep("Rtl Trade", 1121), rep("Entertainment", ), rep("Transportation", 321), rep("Info & Comm", 311), rep("Finance, Ins, RE", 321), rep("Prof Services", 521), rep("Edu/Health", 611), rep("Food", 131), rep("Other Service", 521), rep("Public Admin", 221), rep("Military", 221), rep("Special Code", 41))))
+
+nlsy["score.sat.math"] <- factor(mapvalues(nlsy[["score.sat.math"]],
+		c(1, 2, 3, 4, 5, 6, 0), c("200 - 300", "301 - 400", "401 - 500", "501 - 600", "601 - 700", "701 - 800", "No Score Yet")), 
+		levels= c("200 - 300", "301 - 400", "401 - 500", "501 - 600", "601 - 700", "701 - 800", "No Score Yet", "?"))
+nlsy["score.sat.verbal"] <- factor(mapvalues(nlsy[["score.sat.verbal"]],
+		c(1, 2, 3, 4, 5, 6, 0), c("200 - 300", "301 - 400", "401 - 500", "501 - 600", "601 - 700", "701 - 800", "No Score Yet")), 
+		levels= c("200 - 300", "301 - 400", "401 - 500", "501 - 600", "601 - 700", "701 - 800", "No Score Yet", "?"))
+nlsy["score.act"] <- factor(mapvalues(nlsy[["score.act"]],c(1, 2, 3, 4, 5, 6, 0), 
+		c("0 - 6", "6 - 12", "13 - 18", "19 - 24", "25 - 30", "31 - 36", "No Score Yet")), 
+		levels= c("0 - 6", "6 - 12", "13 - 18", "19 - 24", "25 - 30", "31 - 36", "No Score Yet", "?"))
+
+```
+
+####**(d)** Re-level some factors
+
+After analyzing the data, it becomes apparent that several factor variables have too many levels with very small counts, so it makes sense to re-level them into broader categories:
+
+``` {r, warning=FALSE}
+# add my own simplified level factor variables
+nlsy <- transform(nlsy, ever.married = factor(mapvalues(nlsy[["marital.status"]],
+                                                    c("Never-married", "Married", "Separated", "Divorced",
+                                                      "Widowed", "?"), 
+                                                  c("Never Married", "Married", "Married", "Married", "Married",
+                                                    "Never Married")),
+                                               levels= c("Never Married", "Married")
+                                             ),
+                  
+                  work.industry.food = factor(mapvalues(work.industry,
+                                            c("Prof Services", "Construction", "Edu/Health", 
+                                              "Rtl Trade", "Manufacturing", "Food",
+                                              "Finance, Ins, RE", "?", "Public Admin", "Other Service",
+                                              "Transportation", "Whlsle Trade", "Info & Comm", "Mining",
+                                              "Utilities", "Agriculture", "Military", "Special Code"),
+                                            c(rep("No",5), "Yes", rep("No",12)))
+                                            ),
+
+                  degree.post.hs = factor(mapvalues(highest.degree.asof.2011,
+                                                              c("None", "GED", "High School", "Associate",
+                                                                "Bachelor", "Master", "PhD", "Professional","?"),
+                                                              c("No", "No", "No", "Yes", "Yes", "Yes", "Yes",
+                                                                "Yes","No")),
+                                          levels = c("No","Yes")
+                                          ),
+                 
+                  race.black = factor(mapvalues(race,
+                                            c("Black", "Hispanic", "Mixed", "Non-Black/NonHispanic"),
+                                            c("Black", "NonBlack", "NonBlack", "NonBlack")), 
+                                      levels= c("NonBlack", "Black")
+                                     )
+                  )
+```
+
+####**(e)** Handle top-coded values and other cleanup
+
+Now we need to address the "topcoding" issues. For the `income` variable we know that the top 2% were given the average value of thetop 2%, which is easily seen in a histogram.
+
+```{r, warning=FALSE}
+# plot histogram of income
+qplot(income, geom = "histogram", binwidth=5000, data = nlsy)
+```
+
+There are `r nrow(nlsy[which(nlsy$income==max(nlsy$income, na.rm = TRUE)), ])` top-coded values with the exact income amount of $`r max(nlsy$income, na.rm = TRUE)`; we will exclude those outliers from the regression data. We may have kept them if their actual value were known, but top-coded values can interfere with out regression analysis, so we need to remove them.
+
+This removal does narrow the scope of our analysis to exclude very high earners. Given the data constraints, this is an acceptable reduction in scope.
+
+```{r, results='hide'}
+# remove top-coded incomes
+nlsy <- nlsy[-1*which(nlsy$income==max(nlsy$income, na.rm = TRUE)), ]
+qplot(x=income, geom = "histogram", binwidth=5000, data = nlsy)
+```
+
+Above we can see we successfully removed the top-coded values.
+
+New Observation Count is: `r nrow(nlsy)`
+
+We also want to cleanup some some odd values and extreme outliers in other columns:
+```{r}
+# make top-coded family incomes NA
+nlsy[which(nlsy$income.family==max(nlsy$income.family, na.rm = TRUE)), "income.family" ] <- NA
+
+nlsy[which(nlsy$income.spouse==max(nlsy$income.spouse, na.rm = TRUE)), "income.spouse" ] <- NA
+
+# make highest grade NA for value 95
+nlsy[which.max(nlsy$highest.grade.asof.2011), "highest.grade.asof.2011" ] <- NA
+
+# make extremely low outlier for net.worth = NA
+nlsy[which.min(nlsy$net.worth.from.parent.1997), "net.worth.from.parent.1997" ] <- NA
+
+# make top-coded family net worth incomes = NA
+nlsy[which.max(nlsy$net.worth.from.parent.1997), "net.worth.from.parent.1997" ] <- NA
+
+# data within income.yes.no is slightly inconsistent with NAs in income. Fix it.
+nlsy[which(is.na(nlsy$income) | 0), "income.yes.no"] <- "No"
+nlsy[which(nlsy$income>0), "income.yes.no"] <- "Yes"
+```
+
+
+####**(f)** Remove records without income
+
+If we take a quick look at the data, we actually see that a large portion of the data had either zero or missing income data:
+```{r, results='asis'}
+kable(ddply(nlsy, ~ income.yes.no, summarize, count=length(income), mean.income=mean(income, na.rm = TRUE)), format = "markdown")
+```
+
+Since the purpose of this project is to analyze differences in income between men and women, we can remove those rows without income from our dataset:
+
+```{r}
+nlsy <- nlsy[which(nlsy$income.yes.no=="Yes") , ]
+```
+
+New Observation Count is: `r nrow(nlsy)`. 
+
+####**(g)** Basic counts/means
+
+Now that we've cleaned our data, let's take a look at some basic counts, means, and boxplots. 
+
+The income gap we are trying to analyze is easiest shown like this:
+
+```{r, results='asis'}
+counts.means <- ddply(nlsy, ~ gender, summarize, count=length(income), mean.income=mean(income, na.rm = TRUE))
+kable(counts.means, format = "markdown")
+```
+
+```{r, echo=FALSE}
+gap <- round(counts.means[1, "mean.income"] - counts.means[2, "mean.income"],2)
+```
+
+Our goal is to try and analyze this income gap of $`r gap`.
+
+Visually, a boxplot can show us an even better summary of the data, since it shows the distribution. The box represents the interquartile range (IQR, or 25th to 75th percentile), the horizontal line represents the median, the vertical lines (whiskers) show 1.5 times the IQR, and the dots are outliers. 
+
+```{r, warning=FALSE, message=FALSE, results='hide'}
+qplot(gender, income, geom = "boxplot", data = nlsy, na.rm=TRUE, fill=gender)+ scale_fill_manual(values=c("#79a6c8", "#f67f7f"))
+```
+
+The above boxplot gives us similar information about the gender gap, but also shows the distribution. This type of visualization is key in the Methodology section.
+
+One common variable used in this type of analysis is race, so let's take a look at a race breakout:
+```{r, warning=FALSE, message=FALSE, results='hide'}
+qplot(race, income, geom = "boxplot", data = nlsy, na.rm=TRUE, fill=gender)+ scale_fill_manual(values=c("#79a6c8", "#f67f7f"))
+```
+
+From the above plot, it looks like women of mixed raced may be penalized the most, while black women are penalized the least for being a woman. Althought the gender income gap is the smallest for the black bucket, black also has the lowest income out of all the buckets.
+
+Before we begin presenting the data in more complex ways, let's first explain the methodology used.
+
+###2. Methodology
+
+The code below shows how I first tackled the data after initial cleanup. For each categorical variable, I was able to get the following:
+
+#####**(a)** Bar chart showing counts of all categorical variables broken out by by gender
+
+#####**(b)** Boxplots that showed income cut by both gender for every categorical variable, with counts plotted at the mean. The counts on each box helped me to quickly validate whether the box I was looking at had enough data points to be considered valid.
+
+#####**(c)** Dot plots with linear regressions for income vs all numeric variables cut by gender
+
+#####**(d)** Combining insights from parts b and c. I facet wrapped several continuous variables by categorical variables to see the interaction effect.
+
+#####**(e)** Relevel factors into new variables with broader buckets to reduce issues with small sample buckets.
+
+This resulted in over 60 plots that I was able to visually analyze to understand the data. Refer to RMD code to see how I achieved to plot everything at once.
+```{r, eval=FALSE, echo=FALSE, warning=FALSE, message=FALSE, results='hide'}
+# This is the code chunk that produces over 60 plots that I analyzed to visually understand the data
+# a) Categorical variables: bar chart counts
+lapply(var.factor, FUN = function(iterate) 
+  ggplot(data=nlsy, aes_string(x="gender",  fill="gender")) +
+       geom_bar(na.rm=TRUE, stat ="bin", position = "dodge") + facet_wrap(as.formula(paste("~", iterate))) +
+       scale_fill_manual(values=c("#79a6c8", "#f67f7f")) +
+       ggtitle(paste(iterate," (NA count = ", sum(is.na(nlsy[[iterate]])), ")", sep = "")) 
+       )
+# this function returns the count of each boxplot, and places the count at the mean on the plot
+# I found this function on stackoverflow
+# citation: http://stackoverflow.com/questions/3483203/create-a-boxplot-in-r-that-labels-a-box-with-the-sample-size-n
+count.n <- function(x){
+   return(c(y = mean(x), label = length(x)))
+}
+
+# b) Categorical variables: boxplots
+lapply(var.factor, FUN = function(iterate)
+  ggplot(data=nlsy, aes_string(x="gender", y="income",  fill="gender")) +
+       geom_boxplot(na.rm=TRUE) + facet_wrap(as.formula(paste("~", iterate))) +
+       scale_fill_manual(values=c("#79a6c8", "#f67f7f")) +
+       ggtitle(paste(iterate," (NA count = ", sum(is.na(nlsy[[iterate]])), ")", sep = "")) +
+       stat_summary(fun.data = count.n, geom = "text")
+       )
+
+# c) Numeric variables: dot plot with linear regression
+lapply(var.numeric, FUN = function(iterate) ggplot(data=nlsy, aes_string(x=iterate, y="income", colour="gender")) +
+       scale_colour_manual(values=c("#79a6c8", "#f67f7f")) +
+       geom_point(na.rm=TRUE) +
+       geom_smooth(method='lm',formula=y~x) +
+       ggtitle(paste(iterate," (NA count = ", sum(is.na(nlsy[[iterate]])), ")", sep = ""))
+       )
+
+```
+
+I will not show the output of all 60+ plots since it is quite extensive, but I will show select examples of my takeaways.
+
+####**(a)** Bar chart example
+
+When discussing the income gender gap, many people think the difference is wholly attributable to the industries that men tend to work in have higher pay. Before we analyze that claim, let's see the dsitribution of gender across industries:
+
+```{r, warning=FALSE, message=FALSE, results='hide'}
+# Categorical variables: bar chart counts
+lapply("work.industry", FUN = function(iterate) 
+  ggplot(data=nlsy, aes_string(x="gender",  fill="gender")) +
+       geom_bar(na.rm=TRUE, stat ="bin", position = "dodge") + facet_wrap(as.formula(paste("~", iterate))) +
+       scale_fill_manual(values=c("#79a6c8", "#f67f7f")) +
+       ggtitle(paste(iterate," (NA count = ", sum(is.na(nlsy[[iterate]])), ")", sep = "")) 
+       )
+
+```
+
+
+Work industry does seem to be split unevenly among gender..
+
+The stark differences seen above may or may not be useful in our model. We also may need to summarize this variable into broader buckets during modelling.
+
+####**(b)** Box plot example
+
+An example of an interesting categorical variable was marital status. The variable shown below is the simplified version of the marital status variable, which indidcates if the respondent was Never Married vs. Married/Widowed/Divorced/etc.  (note: Numbers shown in the boxes are the count of data points, located at the mean)
+
+```{r, warning=FALSE, message=FALSE, results='hide'}
+# this function returns the count of each boxplot, and places the count at the mean on the plot
+# I found this function on stackoverflow
+# citation: http://stackoverflow.com/questions/3483203/create-a-boxplot-in-r-that-labels-a-box-with-the-sample-size-n
+count.n <- function(x){
+   return(c(y = mean(x), label = length(x)))
+}
+
+# Categorical variables: boxplots
+lapply("ever.married", FUN = function(iterate)
+  ggplot(data=nlsy, aes_string(x="gender", y="income",  fill="gender")) +
+       geom_boxplot(na.rm=TRUE) + facet_wrap(as.formula(paste("~", iterate))) +
+       scale_fill_manual(values=c("#79a6c8", "#f67f7f")) +
+       ggtitle(paste(iterate," (NA count = ", sum(is.na(nlsy[[iterate]])), ")", sep = "")) +
+       stat_summary(fun.data = count.n, geom = "text")
+       )
+```
+
+Income seemed to change significantly based on the interaction of gender and marital status.
+
+####**(c)** Dot plot with linear fitted line example
+
+An example of a numeric variable that caught my eye was household size, particularly for members under age of 18. 
+```{r, warning=FALSE, message=FALSE, results='hide'}
+# Numeric variables: dot plot with linear regression
+lapply("household.mem.under.18", FUN = function(iterate) ggplot(data=nlsy, aes_string(x=iterate, y="income", colour="gender")) +
+       scale_colour_manual(values=c("#79a6c8", "#f67f7f")) +
+       geom_point(na.rm=TRUE) +
+       geom_smooth(method='lm',formula=y~x) +
+       ggtitle(paste(iterate," (NA count = ", sum(is.na(nlsy[[iterate]])), ")", sep = ""))
+       )
+```
+
+Females showed drastically lower incomes and men showed slighlty higher incomes for larger numbers of household members under the age of 18. 
+
+####**(d)** Dot plot facet wrapped with categorical variable example
+
+The following graphs show household members under 18 against income, cut by gender (color), and split by "never married"" vs "Married". Interestingly, it looks like males are virtually unaffected by increased household size if they are married. Females that never married seemed to fare worse than marrried females. 
+```{r, warning=FALSE, message=FALSE, results='hide'}
+# Numeric variables: dot plot with  linear regression
+lapply("household.mem.under.18", FUN = function(iterate) ggplot(data=nlsy, aes_string(x=iterate, y="income", colour="gender")) +
+       scale_colour_manual(values=c("#79a6c8", "#f67f7f")) +
+       geom_point(na.rm=TRUE) +
+       geom_smooth(method='lm',formula=y~x) +
+       facet_wrap(~ever.married) +
+       ggtitle(paste(iterate," (NA count = ", sum(is.na(nlsy[[iterate]])), ")", sep = ""))
+       )
+```
+
+####**(e)** Releveled Factors
+
+I expected the `highest.degree.asof.2011` variable to be very telling, but surprisingly it didn't seem to useful in explaining the gender gap. I suspected it had too many levels, so I created another variable with less factors called `degree.post.hs` with `Yes` or `No` values. Below you can see the the difference in the gender gap is more apparent for those respondents that did not receive a degree post high school: 
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results='hide'}
+# Categorical variables: boxplots
+lapply("degree.post.hs", FUN = function(iterate)
+  ggplot(data=nlsy, aes_string(x="gender", y="income",  fill="gender")) +
+       geom_boxplot(na.rm=TRUE) + facet_wrap(as.formula(paste("~", iterate))) +
+       scale_fill_manual(values=c("#79a6c8", "#f67f7f")) +
+       ggtitle(paste(iterate," (NA count = ", sum(is.na(nlsy[[iterate]])), ")", sep = "")) +
+       stat_summary(fun.data = count.n, geom = "text")
+       )
+```
+
+During regression modelling, I also found that the `race` variable was also creating problems when combined with other variables. However, I felt that all the variables I had were useful, but that there was not enough data to satisfy every race break for every other factor. Therefore, I releveled `race` into it's two most significant buckets, "Black" and "NonBlack", in a variable called `raceblack`:
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results='hide'}
+# Categorical variables: boxplots
+lapply("race.black", FUN = function(iterate)
+  ggplot(data=nlsy, aes_string(x="gender", y="income",  fill="gender")) +
+       geom_boxplot(na.rm=TRUE) + facet_wrap(as.formula(paste("~", iterate))) +
+       scale_fill_manual(values=c("#79a6c8", "#f67f7f")) +
+       ggtitle(paste(iterate," (NA count = ", sum(is.na(nlsy[[iterate]])), ")", sep = "")) +
+       stat_summary(fun.data = count.n, geom = "text")
+       )
+```
+
+The gender gap difference here is much more apparent with large samples in each bucket, and therefore more useful for modelling purposes.
+
+In total, variables that looked significant to me were the following: 
+
+Categorical:
+
+* gender
+* race
+* race.black
+* work.industry.food
+* smoked.since.last.interview
+* degree.post.hs
+* ever.married
+
+Numeric:
+
+* household.mem.under.18
+* income.family
+* income.spouse
+* net.worth.from.parent.1997
+* net.worth.from.r.2003
+* incar.num
+
+Let's add them to vectors for easy use:
+
+```{r}
+var.factor.model <- c("gender", "race", "race.black", "work.industry.food", "smoked.since.last.interview", "degree.post.hs","ever.married")
+var.numeric.model <- c("household.mem.under.18", "income.family", "income.spouse", "net.worth.from.parent.1997", "net.worth.from.r.2003", "incar.num")
+```
+
+In the next section, we will use statistical analysis to see if we can make any findings.
+
+###3. Findings
+
+####Collinearity
+The first thing I want to do is check for collinearity among our variables.
+
+```{r}
+# Function taken from ?pairs Example section.  
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- abs(cor(x, y, use='pairwise')) # enabled pairwise option
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste0(prefix, txt)
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = pmax(1, cex.cor * r))
+}
+
+# Use panel.cor to display correlations in lower panel.
+pairs(nlsy[ , var.numeric.model], lower.panel = panel.cor)
+```
+
+Spousal income and family income are highly correlated. Based on prior research I am choosing to remove spousal income.
+
+
+```{r}
+# remove element
+var.numeric.model <- var.numeric.model[! var.numeric.model %in% c("income.spouse")]
+```
+
+####Continuous Variable Significance Across Gender
+Next, I want to run a data summary broken by gender to make sure to validate that the variables are statistically significant across gender: 
+
+``` {r, results='asis'}
+# generate summary of numeric variables
+kable(generateDataSummary(nlsy, var.numeric.model, "gender"), format="markdown")
+```
+
+
+Unforturnately, it looks like I need to throw out both net worth variables from my analysis. The P-values are greater than our threshold of 0.05, so we should not use them in the regression analysis. 
+
+I also want to remove `income.family` since it has too many missing values. Even if `income.family` had enough data, I probably would have needed to remove it anyway. Originally, I thought the variable indicated family income at ***childhood***, but since the variable is from 2011 data it is more likely that it is simply the sum of the respondent's income plus other household members' income, which is not very useful. It is probably too closely related to the independent variable.
+
+Let's remove them:
+
+```{r}
+# remove element
+var.numeric.model <- var.numeric.model[! var.numeric.model %in% c("net.worth.from.r.2003", "net.worth.from.parent.1997", "income.family", "income.spouse")]
+```
+
+####Regression
+
+Now it's time to start our regression. First I want to cut down the dataset for modelling so I can omit any row with `NA`:
+
+```{r}
+# cut down to relevant columns
+nlsy.trim <- nlsy[ , c("income",var.numeric.model, var.factor.model)] 
+
+# cut down to non-NA rows
+nlsy.trim <- na.omit(nlsy.trim)
+```
+
+Final regression model observation count excluding all NAs: `r nrow(nlsy.trim)`
+
+Let's create an initial linear model using just the `gender` variable:
+
+```{r, results='asis'}
+all.lm00 <- lm(income ~ gender, data = nlsy.trim)
+kable(round(summary(all.lm00)$coef, 3), format = "markdown")
+
+```
+
+Looks good so far. We have a P-value of `r round(summary(all.lm00)$coefficients["genderFemale","Pr(>|t|)"],3)` for `gender` and a coefficient of `r round(summary(all.lm00)$coefficients["genderFemale","Estimate"],3)`, which represents the income gap ignoring all other possible factors.
+
+Now let's add more variables to see if we can explain the income gap. 
+
+```{r}
+# add race
+all.lm01 <- update(all.lm00, . ~ . + race)
+anova(all.lm00, all.lm01)
+```
+
+Good, the ANOVA test shows that the addition of race makes our model significantly differenent. I used ANOVA throughout my iterations of models but I will not show every output. 
+
+Let's continue adding variables:
+
+```{r}
+# add marriage
+all.lm02 <- update(all.lm01, . ~ . + ever.married)
+#anova(all.lm01, all.lm02)
+kable(round(summary(all.lm02)$coef, 3), format = "markdown")
+```
+
+Unfortunately we have an insignificant varibale for `raceMixed`, since it has a P-value of `r round(summary(all.lm02)$coefficients["raceMixed","Pr(>|t|)"],3)`. This is probably due to small sample size in that bucket. Let's switch `race` out with the simpler variable `race.black`:
+
+```{r, results='asis'}
+#remove race and add race.black
+all.lm03 <- update(all.lm02, . ~ . - race + race.black)
+kable(round(anova(all.lm02, all.lm03), 3))
+kable(round(summary(all.lm03)$coef, 3), format = "markdown")
+```
+
+Looks great! Let's keep iterating that process:
+
+```{r}
+# add degree.post.hs
+all.lm04 <- update(all.lm03, . ~ . + degree.post.hs)
+#summary(all.lm04)
+
+# add work.industry.food
+all.lm05 <- update(all.lm04, . ~ . + work.industry.food)
+#summary(all.lm05)
+
+# add smoked.since.last.interview
+all.lm06 <- update(all.lm05, . ~ . + smoked.since.last.interview)
+kable(round(summary(all.lm06)$coef, 3), format = "markdown")
+```
+
+The variable `smoked.since.last.interview` has missing variables (indicated by "?") that are not significant, since it has P-value of `r round(summary(all.lm06)$coefficients["smoked.since.last.interview?","Pr(>|t|)"],3)`. Let's remove it and see if `household.mem.under.18` and `incar.num` are useful:
+
+```{r}
+
+# add household.mem.under.18 and remove smoked.since.last.interview
+all.lm07 <- update(all.lm06, . ~ . + household.mem.under.18 - smoked.since.last.interview)
+#kable(round(summary(all.lm07)$coef, 3), format = "markdown")
+#turned out to be good
+
+# add household.mem.under.18 and remove smoked.since.last.interview
+all.lm07 <- update(all.lm07, . ~ . + incar.num)
+kable(round(summary(all.lm07)$coef, 3), format = "markdown")
+```
+
+Now let's add some interaction variables with `gender` to see if we can find cases where income changes across these variables based on gender.
+
+```{r, results='asis'}
+# add interaction var for race.black and gender
+all.lm08 <- update(all.lm07, . ~ . + race.black*gender)
+#summary(all.lm08)
+
+# add interaction var for marriage and gender
+all.lm09 <- update(all.lm08, . ~ . + ever.married*gender)
+#summary(all.lm09)
+
+# add interaction var for household.mem.under.18 and gender
+all.lm10 <- update(all.lm09, . ~ . + household.mem.under.18*gender)
+#summary(all.lm10)
+
+# add interaction var for education and gender
+all.lm11 <- update(all.lm10, . ~ . + degree.post.hs*gender)
+kable(round(summary(all.lm11)$coef, 3), format = "markdown")
+
+```
+
+All of the interactions added turned out to be significant, with the `degree.post.hs` and `gender` interaction variable having the highest P-value of of `r round(summary(all.lm11)$coefficients["genderFemale:degree.post.hsYes","Pr(>|t|)"],3)`, which is still acceptable for our alpha of 0.05. 
+
+The P-value of `r round(summary(all.lm11)$coefficients["household.mem.under.18","Pr(>|t|)"],3)` for `household.mem.under.18` is acceptable only because the interaction P-value of that variable with gender is significant, with a P-value of `r round(summary(all.lm11)$coefficients["genderFemale:household.mem.under.18","Pr(>|t|)"],3)`. We must keep the "low order" base variable for the interaction variable to be present. In any case, the coefficient weight on the non-interaction `household.mem.under.18` is low, at only $`r round(summary(all.lm11)$coefficients["household.mem.under.18","Estimate"],0)`
+
+We will use this as our final model.
+
+```{r}
+# pick best model
+final.lm <- all.lm11
+```
+
+#### Plot Tests
+
+Now let's check the model using standard Plot Tests
+
+```{r}
+# Plot
+plot(final.lm)
+
+```
+
+* The residual vs fitted plot did not turn out so well, because there is definitely a trend in the data. 
+* The Q-Q plot is also showing that the residual distribution is not quite normal, as we would like it to be.
+* The residuals vs leverage plot labeled a few outliers that could be skewing our regression
+
+This probably is not an appropriate model for income.
+
+However, our objective is not necessarily to create a perfect model to predict income. We really are just interested in explaining the income gender gap, which is best shown by our interation variables with gender. We'll discuss this in the next section.
+
+
+###4. Discussion
+
+#### R-squared and coefficient analysis
+
+Now let's display the summary of the model to take a look at the R-squared and the coefficients:
+
+```{r}
+
+# get model summary
+final.lm.summary <- summary(final.lm)
+
+# print summary
+kable(round(final.lm.summary$coef, 3), format = "markdown")
+
+```
+
+```{r, echo=FALSE}
+r.sq <- round(final.lm.summary$r.squared * 100, 2)
+female.penalty <- abs(round(final.lm.summary$coefficients["genderFemale","Estimate"],0))
+black.female.benefit <- abs(round(final.lm.summary$coefficients["genderFemale:race.blackBlack","Estimate"],0))
+black.penalty <- abs(round(final.lm.summary$coefficients["race.blackBlack","Estimate"],0))
+marriage.female.penalty <- abs(round(final.lm.summary$coefficients["genderFemale:ever.marriedMarried","Estimate"],0))
+child.female.penalty <- abs(round(final.lm.summary$coefficients["genderFemale:household.mem.under.18","Estimate"],0))
+degree.female.benefit <- abs(round(final.lm.summary$coefficients["genderFemale:degree.post.hsYes","Estimate"],0))
+```
+
+
+This model has many significant variables (P-values below 0.05), but also a very low r.squared value of `r r.sq`%, indicating that the model is only explaining **`r r.sq`%** of the income variance.
+
+What's very interesting the the high significance on the gender interation variables and their respective coefficients. For example, although females make **$`r female.penalty` less** than males in general, they make even less if they were married, an additional **loss of $`r marriage.female.penalty`**!
+
+Black females are not penalized compared to black males, making **$ `r black.female.benefit` more** than black males, but blacks overall make **$`r black.penalty` less** than other races.
+
+Also, for each child that a female has, she makes **$`r child.female.penalty` less per child**. And females that have a degree post High School tend to make **$`r degree.female.benefit` more than those without the degree**.
+
+The insights that I gained show that gender certainly has an impact on income, but from this analysis most (but not all) of the gap seems to come from non-single women and those with children. I am confident that this analysis shows some significiant directional relationships between gender and income, but I am not very  confident of the magnitude of the gaps that I found, and even less confident about drawing causal conclusions from the analysis. This study would need to have more data with a deeper analysis to distinguish causality vs correlation. 

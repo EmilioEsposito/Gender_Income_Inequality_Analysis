@@ -142,7 +142,7 @@ generateDataSummary <- function(dataset, varnames, group.name) {
 ```{r}
 # import raw csv data from working directory
 
-nlsy <- read.csv(paste(getwd(),"nlsy97_income.csv", sep = "/"), header=TRUE, )
+nlsy <- read.csv("http://www.andrew.cmu.edu/user/achoulde/94842/final_project/nlsy97_income/nlsy97_income.csv", header=TRUE, )
 
 
 # Change column names more descriptive names
